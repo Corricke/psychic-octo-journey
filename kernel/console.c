@@ -17,8 +17,12 @@ void console_init(void)
 
 void console_putc(char c)
 {
+    /* Keep each character atomic across preemption. */
+    uint32_t flags;
+    __asm__ volatile ("pushf; pop %0; cli" : "=r"(flags));
     vga_putc(c);
     serial_putc(c);
+    __asm__ volatile ("push %0; popf" : : "r"(flags) : "memory", "cc");
 }
 
 void console_puts(const char *s)
@@ -38,8 +42,10 @@ void console_input(char c)
 
 char console_getc(void)
 {
+    /* May be entered with interrupts off (syscall gate); make sure
+     * they're on while we wait or the hlt would never wake. */
     while (in_head == in_tail)
-        __asm__ volatile ("hlt");
+        __asm__ volatile ("sti; hlt");
     char c = inbuf[in_tail];
     in_tail++;
     return c;

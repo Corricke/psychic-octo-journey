@@ -5,7 +5,7 @@
 #   LBA 1-64       kernel (KERNEL_SECTORS, must match boot/boot.asm)
 #   LBA 2048-      FAT16 partition (15 MiB, must match the MBR entry)
 
-KERNEL_SECTORS := 64
+KERNEL_SECTORS := 128
 FAT_SECTORS    := 30720
 FAT_START      := 2048
 
@@ -24,7 +24,10 @@ BUILD   := build
 
 C_SRCS  := $(wildcard kernel/*.c)
 C_OBJS  := $(patsubst kernel/%.c,$(BUILD)/%.o,$(C_SRCS))
-OBJS    := $(BUILD)/entry.o $(BUILD)/isr.o $(C_OBJS)
+OBJS    := $(BUILD)/entry.o $(BUILD)/isr.o $(BUILD)/ctx.o $(C_OBJS)
+
+USER_PROGS := hello ticker greet
+USER_BINS  := $(patsubst %,$(BUILD)/user/%.bin,$(USER_PROGS))
 
 .PHONY: all run run-vga clean
 
@@ -41,8 +44,8 @@ os.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(BUILD)/fat.img
 	truncate -s $$(( $(FAT_START) * 512 )) $@
 	cat $(BUILD)/fat.img >> $@
 
-# FAT16 filesystem populated with some starter files.
-$(BUILD)/fat.img: README.md | $(BUILD)
+# FAT16 filesystem populated with starter files and user programs.
+$(BUILD)/fat.img: README.md $(USER_BINS) | $(BUILD)
 	truncate -s $$(( $(FAT_SECTORS) * 512 )) $@.tmp
 	mkfs.fat -F 16 -n OCTOOS $@.tmp > /dev/null
 	echo "Hello from the OctoOS filesystem!" > $(BUILD)/hello.txt
@@ -51,7 +54,20 @@ $(BUILD)/fat.img: README.md | $(BUILD)
 	mcopy -i $@.tmp README.md ::README.MD
 	mcopy -i $@.tmp $(BUILD)/hello.txt ::HELLO.TXT
 	mcopy -i $@.tmp $(BUILD)/lorem.txt ::LOREM.TXT
+	mmd -i $@.tmp ::BIN
+	for p in $(USER_PROGS); do \
+	    mcopy -i $@.tmp $(BUILD)/user/$$p.bin ::BIN/ ; \
+	done
 	mv $@.tmp $@
+
+# User programs: flat binaries linked at USER_BASE.
+$(BUILD)/user/%.o: user/%.c | $(BUILD)
+	@mkdir -p $(BUILD)/user
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/user/%.bin: $(BUILD)/user/crt0.o $(BUILD)/user/%.o user/user.ld
+	$(LD) -m elf_i386 -T user/user.ld --oformat binary -nostdlib \
+	    $(BUILD)/user/crt0.o $(BUILD)/user/$*.o -o $@
 
 $(BUILD)/boot.bin: boot/boot.asm | $(BUILD)
 	$(NASM) -f bin $< -o $@

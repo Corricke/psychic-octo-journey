@@ -61,6 +61,8 @@ ISR_NOERR i
 %assign i i+1
 %endrep
 
+ISR_NOERR 128                   ; syscall
+
 isr_common:
     pusha
     push esp                    ; struct regs *

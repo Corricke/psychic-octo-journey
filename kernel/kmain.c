@@ -1,7 +1,11 @@
 #include "console.h"
+#include "gdt.h"
 #include "idt.h"
 #include "timer.h"
 #include "heap.h"
+#include "frame.h"
+#include "paging.h"
+#include "task.h"
 #include "ata.h"
 #include "fat.h"
 #include "shell.h"
@@ -9,9 +13,13 @@
 void kmain(void)
 {
     console_init();
+    gdt_init();
     timer_init();
     idt_init();
     heap_init();
+    frame_init();
+    paging_init();
+    task_init();
 
     console_puts(
         "\n"

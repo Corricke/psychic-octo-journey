@@ -8,7 +8,7 @@
 [bits 16]
 
 KERNEL_LBA     equ 1            ; kernel starts in the sector after us
-KERNEL_SECTORS equ 64           ; 32 KiB, kept in sync with the Makefile
+KERNEL_CHUNKS  equ 2            ; 2 x 64 sectors = 64 KiB (Makefile: 128)
 KERNEL_SEG     equ 0x1000       ; physical 0x10000
 E820_COUNT     equ 0x0500       ; u32 entry count
 E820_MAP       equ 0x0504       ; 24-byte entries follow
@@ -23,12 +23,20 @@ start:
     sti
     mov [boot_drive], dl
 
-    ; Load the kernel with an extended read (DAP below).
+    ; Load the kernel with extended reads, 64 sectors (32 KiB) per call
+    ; so each lands exactly inside one real-mode segment.
+    mov cx, KERNEL_CHUNKS
+.load:
+    push cx
     mov si, dap
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
+    pop cx
     jc disk_error
+    add word [dap + 8], 64      ; next LBA
+    add word [dap + 6], 0x800   ; next segment (32 KiB / 16)
+    loop .load
 
     call do_e820
 
@@ -102,7 +110,7 @@ gdt_desc:
 
 dap:                            ; disk address packet for INT 13h AH=42h
     db 16, 0
-    dw KERNEL_SECTORS
+    dw 64                       ; sectors per read
     dw 0x0000, KERNEL_SEG       ; destination offset:segment
     dq KERNEL_LBA
 

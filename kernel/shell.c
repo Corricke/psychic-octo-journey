@@ -9,6 +9,8 @@
 #include "heap.h"
 #include "ata.h"
 #include "fat.h"
+#include "task.h"
+#include "frame.h"
 
 #define LINE_MAX 128
 
@@ -97,8 +99,14 @@ static void cmd_help(void)
         "  about              about OctoOS\n"
         "  echo <text>        print text\n"
         "  clear              clear the screen\n"
-        "  ls                 list files (FAT16 root directory)\n"
+        "  ls [path]          list a directory\n"
         "  cat <file>         print a file\n"
+        "  write <file> <txt> write text to a file\n"
+        "  rm <path>          remove a file or empty directory\n"
+        "  mkdir <dir>        create a directory\n"
+        "  cd <dir>           change directory\n"
+        "  run <file> [&]     run a user program (& = background)\n"
+        "  ps                 list tasks\n"
         "  mem                BIOS E820 memory map\n"
         "  heap               kernel heap statistics\n"
         "  disk               ATA drive information\n"
@@ -177,6 +185,69 @@ static void cmd_disk(void)
     kprintf("model: %s\n", ata_model());
     kprintf("sectors: %u (%u MiB)\n",
             ata_sectors(), ata_sectors() / 2048);
+}
+
+static void cmd_run(char *args)
+{
+    int background = 0;
+    char *flag = split_args(args);
+    if (strcmp(flag, "&") == 0)
+        background = 1;
+    if (!*args) {
+        console_puts("usage: run <file> [&]\n");
+        return;
+    }
+
+    uint32_t size;
+    void *image = fat_read_file(args, &size);
+    if (!image)
+        return;
+
+    int pid = task_spawn_user(args, image, size);
+    kfree(image);
+    if (pid < 0)
+        return;
+
+    if (background) {
+        kprintf("[%d] %s\n", pid, args);
+        return;
+    }
+
+    struct task *t = task_by_pid(pid);
+    while (*(volatile enum task_state *)&t->state != TASK_ZOMBIE)
+        __asm__ volatile ("sti; hlt");
+    if (t->exit_code)
+        kprintf("exit code %d\n", t->exit_code);
+    task_reap(t);
+}
+
+static void cmd_ps(void)
+{
+    struct task *tasks = task_table();
+    console_puts("pid  state    name\n");
+    for (int i = 0; i < MAX_TASKS; i++) {
+        struct task *t = &tasks[i];
+        if (t->state == TASK_FREE)
+            continue;
+        kprintf("%d    %s   %s%s\n", t->pid,
+                t->state == TASK_ZOMBIE ? "zombie" : "ready ",
+                t->name, t == task_current() ? " *" : "");
+    }
+    kprintf("free frames: %u (%u KiB)\n",
+            frame_free_count(), frame_free_count() * 4);
+}
+
+/* Reap finished background tasks (the foreground path reaps its own). */
+static void reap_zombies(void)
+{
+    struct task *tasks = task_table();
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (tasks[i].state == TASK_ZOMBIE) {
+            kprintf("[%d] %s exited (%d)\n", tasks[i].pid, tasks[i].name,
+                    tasks[i].exit_code);
+            task_reap(&tasks[i]);
+        }
+    }
 }
 
 static void cmd_uptime(void)
@@ -263,7 +334,8 @@ void shell_run(void)
     char line[LINE_MAX];
 
     for (;;) {
-        console_puts("octo> ");
+        reap_zombies();
+        kprintf("octo:%s> ", fat_cwd());
         read_line(line);
 
         char *cmd = line;
@@ -282,13 +354,42 @@ void shell_run(void)
         else if (strcmp(cmd, "clear") == 0)
             vga_clear();
         else if (strcmp(cmd, "ls") == 0)
-            fat_ls();
+            fat_ls(args);
         else if (strcmp(cmd, "cat") == 0) {
             if (*args)
                 fat_cat(args);
             else
                 console_puts("usage: cat <file>\n");
         }
+        else if (strcmp(cmd, "write") == 0) {
+            char *text = split_args(args);
+            if (*args && *text) {
+                uint32_t len = strlen(text);
+                text[len] = '\n';   /* reuse the line buffer's NUL slot */
+                if (fat_write_file(args, text, len + 1) == 0)
+                    console_puts("ok\n");
+            } else {
+                console_puts("usage: write <file> <text>\n");
+            }
+        }
+        else if (strcmp(cmd, "rm") == 0) {
+            if (*args)
+                fat_rm(args);
+            else
+                console_puts("usage: rm <path>\n");
+        }
+        else if (strcmp(cmd, "mkdir") == 0) {
+            if (*args)
+                fat_mkdir(args);
+            else
+                console_puts("usage: mkdir <dir>\n");
+        }
+        else if (strcmp(cmd, "cd") == 0)
+            fat_cd(*args ? args : "/");
+        else if (strcmp(cmd, "run") == 0)
+            cmd_run(args);
+        else if (strcmp(cmd, "ps") == 0)
+            cmd_ps();
         else if (strcmp(cmd, "mem") == 0)
             cmd_mem();
         else if (strcmp(cmd, "heap") == 0)

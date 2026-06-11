@@ -4,6 +4,8 @@
 #include "timer.h"
 #include "keyboard.h"
 #include "serial.h"
+#include "task.h"
+#include "syscall.h"
 
 struct idt_entry {
     uint16_t base_lo;
@@ -32,6 +34,7 @@ static struct idt_ptr idtp;
 #define X(n) DECL_ISR(n)
 ISR_LIST
 #undef X
+DECL_ISR(128)
 
 static void idt_set(int n, void (*handler)(void))
 {
@@ -74,16 +77,29 @@ static const char *exception_names[32] = {
 void isr_handler(struct regs *r)
 {
     if (r->int_no < 32) {
+        if ((r->cs & 3) == 3) {
+            kprintf("\n%s in '%s' (pid %d) at %p -- killed\n",
+                    exception_names[r->int_no], task_current()->name,
+                    task_current()->pid, r->eip);
+            task_exit(-1);      /* does not return */
+        }
         kprintf("\nPANIC: exception %u (%s), err=%x, eip=%p\n",
                 r->int_no, exception_names[r->int_no], r->err_code, r->eip);
         for (;;)
             __asm__ volatile ("cli; hlt");
     }
 
+    if (r->int_no == 128) {
+        r->eax = (uint32_t)syscall_dispatch(r);
+        return;
+    }
+
     switch (r->int_no) {
     case 32:
         timer_tick();
-        break;
+        outb(0x20, 0x20);       /* EOI before a possible context switch */
+        sched_preempt();
+        return;
     case 33:
         keyboard_irq();
         break;
@@ -107,6 +123,9 @@ void idt_init(void)
 #define X(n) idt_set(n, isr##n);
     ISR_LIST
 #undef X
+
+    idt_set(128, isr128);
+    idt[128].flags = 0xEE;      /* DPL 3 so ring 3 can int 0x80 */
 
     idtp.limit = sizeof(idt) - 1;
     idtp.base = (uint32_t)idt;
