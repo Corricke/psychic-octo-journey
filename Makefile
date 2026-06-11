@@ -1,9 +1,13 @@
 # OctoOS build
 #
-# Produces os.img: [boot sector][kernel padded to KERNEL_SECTORS sectors].
-# KERNEL_SECTORS must match boot/boot.asm.
+# Produces os.img, a 16 MiB disk:
+#   LBA 0          boot sector (with MBR partition table)
+#   LBA 1-64       kernel (KERNEL_SECTORS, must match boot/boot.asm)
+#   LBA 2048-      FAT16 partition (15 MiB, must match the MBR entry)
 
 KERNEL_SECTORS := 64
+FAT_SECTORS    := 30720
+FAT_START      := 2048
 
 CC      := gcc
 LD      := ld
@@ -26,7 +30,7 @@ OBJS    := $(BUILD)/entry.o $(BUILD)/isr.o $(C_OBJS)
 
 all: os.img
 
-os.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin
+os.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(BUILD)/fat.img
 	@size=$$(stat -c%s $(BUILD)/kernel.bin); \
 	max=$$(( $(KERNEL_SECTORS) * 512 )); \
 	if [ $$size -gt $$max ]; then \
@@ -34,7 +38,20 @@ os.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin
 	    exit 1; \
 	fi
 	cat $(BUILD)/boot.bin $(BUILD)/kernel.bin > $@
-	truncate -s $$(( ($(KERNEL_SECTORS) + 1) * 512 )) $@
+	truncate -s $$(( $(FAT_START) * 512 )) $@
+	cat $(BUILD)/fat.img >> $@
+
+# FAT16 filesystem populated with some starter files.
+$(BUILD)/fat.img: README.md | $(BUILD)
+	truncate -s $$(( $(FAT_SECTORS) * 512 )) $@.tmp
+	mkfs.fat -F 16 -n OCTOOS $@.tmp > /dev/null
+	echo "Hello from the OctoOS filesystem!" > $(BUILD)/hello.txt
+	seq -f "line %.0f of a file big enough to span several clusters" 1 700 \
+	    > $(BUILD)/lorem.txt
+	mcopy -i $@.tmp README.md ::README.MD
+	mcopy -i $@.tmp $(BUILD)/hello.txt ::HELLO.TXT
+	mcopy -i $@.tmp $(BUILD)/lorem.txt ::LOREM.TXT
+	mv $@.tmp $@
 
 $(BUILD)/boot.bin: boot/boot.asm | $(BUILD)
 	$(NASM) -f bin $< -o $@

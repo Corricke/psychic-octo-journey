@@ -8,6 +8,12 @@ no GRUB, no libc, no dependencies beyond a compiler.
   OctoOS 0.1 -- x86 command-line operating system
   Type 'help' for a list of commands.
 
+octo> ls
+README.MD  3685 bytes
+HELLO.TXT  34 bytes
+LOREM.TXT  38392 bytes
+octo> cat hello.txt
+Hello from the OctoOS filesystem!
 octo> mem
 base              length            type
 0000000000000000  000000000009fc00  1 (usable)
@@ -26,8 +32,17 @@ octo> peek 0x7c00 32
 extensions (LBA), queries the BIOS E820 memory map into low memory for the
 kernel to use later, enables the A20 line via the fast gate, loads a flat
 GDT, and far-jumps into 32-bit protected mode at the kernel entry point.
-Single stage — no second-stage loader, no filesystem; the kernel lives in
-the sectors right after the boot sector.
+Single stage — no second-stage loader; the kernel lives in the sectors
+right after the boot sector. The boot sector doubles as a real MBR: its
+partition table points at a FAT16 partition starting at LBA 2048.
+
+**Disk layout** (16 MiB image):
+
+```
+LBA 0          boot sector + MBR partition table
+LBA 1-64       kernel (flat binary, max 32 KiB)
+LBA 2048-      FAT16 partition (15 MiB) with the filesystem
+```
 
 **Kernel** (`kernel/`): freestanding 32-bit C linked at `0x10000` with a
 small assembly entry stub that zeroes `.bss`. It runs with flat segments,
@@ -42,6 +57,12 @@ no paging, everything in ring 0 — deliberately minimal.
   from the PS/2 keyboard (IRQ 1, scancode set 1, shift/caps handling) and
   serial RX (IRQ 4) feeds one shared ring buffer, so the machine is equally
   usable from a monitor+keyboard or a serial terminal.
+- **Heap**: first-fit `kmalloc`/`kfree` with splitting and coalescing
+  over the largest usable E820 region above 1 MiB (capped at 8 MiB).
+- **Storage**: polled PIO driver for the primary-master ATA drive
+  (IDENTIFY + LBA28 reads), and a read-only FAT16 driver on top that
+  parses the MBR partition table and the BPB, walks cluster chains, and
+  serves the root directory.
 - **Shell**: line editor with backspace, then a simple
   first-word-dispatches command loop.
 
@@ -51,7 +72,11 @@ no paging, everything in ring 0 — deliberately minimal.
 | `about` | about OctoOS |
 | `echo <text>` | print text |
 | `clear` | clear the screen |
+| `ls` | list files in the FAT16 root directory |
+| `cat <file>` | print a file |
 | `mem` | print the BIOS E820 memory map |
+| `heap` | kernel heap statistics |
+| `disk` | ATA drive model and capacity |
 | `uptime` | time since boot (PIT ticks) |
 | `peek <hex> [len]` | hex dump of physical memory |
 | `color <fg> <bg>` | set VGA text color |
@@ -61,7 +86,7 @@ no paging, everything in ring 0 — deliberately minimal.
 ## Building
 
 Requires `gcc` (with 32-bit codegen, standard on x86-64 Linux), `nasm`,
-and GNU `make`:
+GNU `make`, `dosfstools` (`mkfs.fat`), and `mtools` (`mcopy`):
 
 ```sh
 make            # produces os.img
@@ -93,6 +118,9 @@ kernel/serial.c    COM1 UART driver
 kernel/console.c   VGA+serial mux, input ring buffer, kprintf
 kernel/keyboard.c  PS/2 keyboard (scancode set 1)
 kernel/timer.c     PIT at 100 Hz
+kernel/heap.c      kmalloc/kfree over usable E820 memory
+kernel/ata.c       ATA PIO driver (primary master, LBA28)
+kernel/fat.c       read-only FAT16 (MBR + BPB parse, root dir, cat)
 kernel/shell.c     command shell
 kernel/string.c    mem*/str* routines
 kernel/linker.ld   links the kernel as a flat binary at 0x10000

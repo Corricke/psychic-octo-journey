@@ -109,5 +109,14 @@ dap:                            ; disk address packet for INT 13h AH=42h
 boot_drive: db 0
 msg_err:    db "OctoOS: disk read error", 13, 10, 0
 
+; MBR partition table: one FAT16 partition for the filesystem. The CHS
+; fields are dummies; everything modern (and our kernel) uses the LBA.
+times 446 - ($ - $$) db 0
+    db 0x80                     ; bootable
+    db 0xFF, 0xFF, 0xFF         ; CHS start (unused)
+    db 0x06                     ; type: FAT16
+    db 0xFF, 0xFF, 0xFF         ; CHS end (unused)
+    dd 2048                     ; start LBA (1 MiB; sectors 1-64 are kernel)
+    dd 30720                    ; sector count (15 MiB)
 times 510 - ($ - $$) db 0
 dw 0xAA55

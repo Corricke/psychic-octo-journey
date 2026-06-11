@@ -5,18 +5,12 @@
 #include "timer.h"
 #include "string.h"
 #include "io.h"
+#include "e820.h"
+#include "heap.h"
+#include "ata.h"
+#include "fat.h"
 
 #define LINE_MAX 128
-
-struct e820_entry {
-    uint64_t base;
-    uint64_t length;
-    uint32_t type;
-    uint32_t acpi;
-} __attribute__((packed));
-
-#define E820_COUNT (*(volatile uint32_t *)0x0500)
-#define E820_MAP   ((volatile struct e820_entry *)0x0504)
 
 static void read_line(char *buf)
 {
@@ -103,7 +97,11 @@ static void cmd_help(void)
         "  about              about OctoOS\n"
         "  echo <text>        print text\n"
         "  clear              clear the screen\n"
+        "  ls                 list files (FAT16 root directory)\n"
+        "  cat <file>         print a file\n"
         "  mem                BIOS E820 memory map\n"
+        "  heap               kernel heap statistics\n"
+        "  disk               ATA drive information\n"
         "  uptime             time since boot\n"
         "  peek <hex> [len]   hex dump of physical memory\n"
         "  color <fg> <bg>    set text color (0-15)\n"
@@ -154,6 +152,31 @@ static void cmd_mem(void)
             usable += e->length;
     }
     kprintf("usable: %u KiB\n", (uint32_t)(usable / 1024));
+}
+
+static void cmd_heap(void)
+{
+    struct heap_stats st;
+    heap_get_stats(&st);
+    if (!st.total) {
+        console_puts("heap not initialized\n");
+        return;
+    }
+    kprintf("total: %u KiB, used: %u bytes, free: %u KiB\n",
+            st.total / 1024, st.used, st.free / 1024);
+    kprintf("blocks: %u, largest free: %u KiB\n",
+            st.blocks, st.largest_free / 1024);
+}
+
+static void cmd_disk(void)
+{
+    if (!ata_sectors()) {
+        console_puts("no drive detected\n");
+        return;
+    }
+    kprintf("model: %s\n", ata_model());
+    kprintf("sectors: %u (%u MiB)\n",
+            ata_sectors(), ata_sectors() / 2048);
 }
 
 static void cmd_uptime(void)
@@ -258,8 +281,20 @@ void shell_run(void)
             kprintf("%s\n", args);
         else if (strcmp(cmd, "clear") == 0)
             vga_clear();
+        else if (strcmp(cmd, "ls") == 0)
+            fat_ls();
+        else if (strcmp(cmd, "cat") == 0) {
+            if (*args)
+                fat_cat(args);
+            else
+                console_puts("usage: cat <file>\n");
+        }
         else if (strcmp(cmd, "mem") == 0)
             cmd_mem();
+        else if (strcmp(cmd, "heap") == 0)
+            cmd_heap();
+        else if (strcmp(cmd, "disk") == 0)
+            cmd_disk();
         else if (strcmp(cmd, "uptime") == 0)
             cmd_uptime();
         else if (strcmp(cmd, "peek") == 0)
