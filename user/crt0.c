@@ -1,11 +1,11 @@
 #include "syscall.h"
 
-int main(void);
+int main(const char *args);
 
-/* Placed at the very start of the binary; the kernel jumps to
- * USER_BASE, which is here. */
-__attribute__((section(".entry"), used))
+static char argbuf[64];
+
 void _start(void)
 {
-    exit(main());
+    getargs(argbuf, sizeof(argbuf));
+    exit(main(argbuf));
 }

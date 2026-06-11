@@ -52,7 +52,7 @@ static void free_user_pages(uint32_t pgdir)
     frame_free(pgdir);
 }
 
-uint32_t paging_new_user(const void *image, uint32_t size)
+uint32_t paging_new_user(void)
 {
     uint32_t pgdir = frame_alloc();
     if (!pgdir)
@@ -66,38 +66,31 @@ uint32_t paging_new_user(const void *image, uint32_t size)
     }
     ((uint32_t *)pgdir)[USER_PDE] = pt | PTE_U | PTE_W | PTE_P;
 
-    /* Code/data pages: the image plus headroom for .bss and a brk-less
-     * static heap. Frames come zeroed from the allocator. */
-    uint32_t image_pages = (size + PAGE_SIZE - 1) / PAGE_SIZE + 16;
-    uint32_t stack_first = 1024 - USER_STACK_PAGES;
-    if (image_pages >= stack_first)
-        goto fail;
-
-    const uint8_t *src = image;
-    for (uint32_t i = 0; i < image_pages; i++) {
+    for (uint32_t i = 1024 - USER_STACK_PAGES; i < 1024; i++) {
         uint32_t f = frame_alloc();
-        if (!f)
-            goto fail;
-        ((uint32_t *)pt)[i] = f | PTE_U | PTE_W | PTE_P;
-        if (size > i * PAGE_SIZE) {
-            uint32_t chunk = size - i * PAGE_SIZE;
-            if (chunk > PAGE_SIZE)
-                chunk = PAGE_SIZE;
-            memcpy((void *)f, src + i * PAGE_SIZE, chunk);
+        if (!f) {
+            free_user_pages(pgdir);
+            return 0;
         }
-    }
-
-    for (uint32_t i = stack_first; i < 1024; i++) {
-        uint32_t f = frame_alloc();
-        if (!f)
-            goto fail;
         ((uint32_t *)pt)[i] = f | PTE_U | PTE_W | PTE_P;
     }
     return pgdir;
+}
 
-fail:
-    free_user_pages(pgdir);
-    return 0;
+uint32_t paging_user_page(uint32_t pgdir, uint32_t vaddr)
+{
+    if (vaddr < USER_BASE || vaddr >= USER_BASE + USER_IMAGE_MAX)
+        return 0;
+
+    uint32_t *pt = (uint32_t *)(((uint32_t *)pgdir)[USER_PDE] & ~0xFFFu);
+    uint32_t idx = (vaddr - USER_BASE) / PAGE_SIZE;
+    if (!(pt[idx] & PTE_P)) {
+        uint32_t f = frame_alloc();
+        if (!f)
+            return 0;
+        pt[idx] = f | PTE_U | PTE_W | PTE_P;
+    }
+    return pt[idx] & ~0xFFFu;
 }
 
 void paging_destroy_user(uint32_t pgdir)

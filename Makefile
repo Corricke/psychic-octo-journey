@@ -26,8 +26,8 @@ C_SRCS  := $(wildcard kernel/*.c)
 C_OBJS  := $(patsubst kernel/%.c,$(BUILD)/%.o,$(C_SRCS))
 OBJS    := $(BUILD)/entry.o $(BUILD)/isr.o $(BUILD)/ctx.o $(C_OBJS)
 
-USER_PROGS := hello ticker greet
-USER_BINS  := $(patsubst %,$(BUILD)/user/%.bin,$(USER_PROGS))
+USER_PROGS := hello ticker greet cp wc
+USER_BINS  := $(patsubst %,$(BUILD)/user/%.elf,$(USER_PROGS))
 
 .PHONY: all run run-vga clean
 
@@ -56,17 +56,17 @@ $(BUILD)/fat.img: README.md $(USER_BINS) | $(BUILD)
 	mcopy -i $@.tmp $(BUILD)/lorem.txt ::LOREM.TXT
 	mmd -i $@.tmp ::BIN
 	for p in $(USER_PROGS); do \
-	    mcopy -i $@.tmp $(BUILD)/user/$$p.bin ::BIN/ ; \
+	    mcopy -i $@.tmp $(BUILD)/user/$$p.elf ::BIN/ ; \
 	done
 	mv $@.tmp $@
 
-# User programs: flat binaries linked at USER_BASE.
+# User programs: static ELF executables linked at USER_BASE.
 $(BUILD)/user/%.o: user/%.c | $(BUILD)
 	@mkdir -p $(BUILD)/user
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/user/%.bin: $(BUILD)/user/crt0.o $(BUILD)/user/%.o user/user.ld
-	$(LD) -m elf_i386 -T user/user.ld --oformat binary -nostdlib \
+$(BUILD)/user/%.elf: $(BUILD)/user/crt0.o $(BUILD)/user/%.o user/user.ld
+	$(LD) -m elf_i386 -T user/user.ld -s -nostdlib --no-warn-rwx-segments \
 	    $(BUILD)/user/crt0.o $(BUILD)/user/$*.o -o $@
 
 $(BUILD)/boot.bin: boot/boot.asm | $(BUILD)

@@ -14,14 +14,91 @@
 
 #define LINE_MAX 128
 
+#define HIST_MAX 8
+
+static char history[HIST_MAX][LINE_MAX];
+static int hist_len;
+
+static void hist_push(const char *line)
+{
+    if (hist_len && strcmp(history[hist_len - 1], line) == 0)
+        return;
+    if (hist_len == HIST_MAX) {
+        memmove(history[0], history[1], (HIST_MAX - 1) * LINE_MAX);
+        hist_len--;
+    }
+    memcpy(history[hist_len++], line, strlen(line) + 1);
+}
+
+static void line_replace(char *buf, int *len, const char *src)
+{
+    while (*len > 0) {
+        console_puts("\b \b");
+        (*len)--;
+    }
+    while (*src && *len < LINE_MAX - 1) {
+        buf[(*len)++] = *src;
+        console_putc(*src++);
+    }
+}
+
 static void read_line(char *buf)
 {
     int len = 0;
+    int browse = -1;            /* -1: editing a fresh line */
+    int esc = 0;                /* serial escape parser: ESC [ A..D */
+
     for (;;) {
-        char c = console_getc();
+        uint8_t c = (uint8_t)console_getc();
+
+        if (esc == 1) {
+            esc = (c == '[') ? 2 : 0;
+            continue;
+        }
+        if (esc == 2) {
+            esc = 0;
+            switch (c) {
+            case 'A': c = KEY_UP; break;
+            case 'B': c = KEY_DOWN; break;
+            case 'C': c = KEY_RIGHT; break;
+            case 'D': c = KEY_LEFT; break;
+            default: continue;
+            }
+        } else if (c == 27) {
+            esc = 1;
+            continue;
+        }
+
+        if (c == KEY_UP) {
+            if (hist_len == 0)
+                continue;
+            if (browse < 0)
+                browse = hist_len - 1;
+            else if (browse > 0)
+                browse--;
+            line_replace(buf, &len, history[browse]);
+            continue;
+        }
+        if (c == KEY_DOWN) {
+            if (browse < 0)
+                continue;
+            browse++;
+            if (browse >= hist_len) {
+                browse = -1;
+                line_replace(buf, &len, "");
+            } else {
+                line_replace(buf, &len, history[browse]);
+            }
+            continue;
+        }
+        if (c == KEY_LEFT || c == KEY_RIGHT)
+            continue;
+
         if (c == '\r' || c == '\n') {
             console_putc('\n');
             buf[len] = '\0';
+            if (len > 0)
+                hist_push(buf);
             return;
         }
         if (c == '\b' || c == 0x7F) {
@@ -34,8 +111,9 @@ static void read_line(char *buf)
         if (c < ' ' || c > '~')
             continue;
         if (len < LINE_MAX - 1) {
-            buf[len++] = c;
-            console_putc(c);
+            buf[len++] = (char)c;
+            console_putc((char)c);
+            browse = -1;
         }
     }
 }
@@ -105,8 +183,9 @@ static void cmd_help(void)
         "  rm <path>          remove a file or empty directory\n"
         "  mkdir <dir>        create a directory\n"
         "  cd <dir>           change directory\n"
-        "  run <file> [&]     run a user program (& = background)\n"
+        "  run <file> [args] [&]  run a user program (& = background)\n"
         "  ps                 list tasks\n"
+        "  history            show command history\n"
         "  mem                BIOS E820 memory map\n"
         "  heap               kernel heap statistics\n"
         "  disk               ATA drive information\n"
@@ -189,13 +268,21 @@ static void cmd_disk(void)
 
 static void cmd_run(char *args)
 {
-    int background = 0;
-    char *flag = split_args(args);
-    if (strcmp(flag, "&") == 0)
-        background = 1;
+    char *rest = split_args(args);
     if (!*args) {
-        console_puts("usage: run <file> [&]\n");
+        console_puts("usage: run <file> [args] [&]\n");
         return;
+    }
+
+    /* A trailing lone '&' means background. */
+    int background = 0;
+    uint32_t rlen = strlen(rest);
+    if (rlen >= 1 && rest[rlen - 1] == '&' &&
+        (rlen == 1 || rest[rlen - 2] == ' ')) {
+        background = 1;
+        rest[rlen - 1] = '\0';
+        while (rlen > 1 && rest[rlen - 2] == ' ')
+            rest[--rlen - 1] = '\0';
     }
 
     uint32_t size;
@@ -203,7 +290,7 @@ static void cmd_run(char *args)
     if (!image)
         return;
 
-    int pid = task_spawn_user(args, image, size);
+    int pid = task_spawn_user(args, image, size, rest);
     kfree(image);
     if (pid < 0)
         return;
@@ -390,6 +477,10 @@ void shell_run(void)
             cmd_run(args);
         else if (strcmp(cmd, "ps") == 0)
             cmd_ps();
+        else if (strcmp(cmd, "history") == 0) {
+            for (int i = 0; i < hist_len; i++)
+                kprintf("%d  %s\n", i + 1, history[i]);
+        }
         else if (strcmp(cmd, "mem") == 0)
             cmd_mem();
         else if (strcmp(cmd, "heap") == 0)

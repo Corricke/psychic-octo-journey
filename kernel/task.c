@@ -3,6 +3,8 @@
 #include "frame.h"
 #include "heap.h"
 #include "gdt.h"
+#include "elf.h"
+#include "file.h"
 #include "string.h"
 #include "console.h"
 
@@ -44,7 +46,8 @@ struct task *task_table(void)
     return tasks;
 }
 
-int task_spawn_user(const char *name, const void *image, uint32_t size)
+int task_spawn_user(const char *name, const void *image, uint32_t size,
+                    const char *args)
 {
     int slot = -1;
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -58,9 +61,15 @@ int task_spawn_user(const char *name, const void *image, uint32_t size)
         return -1;
     }
 
-    uint32_t pgdir = paging_new_user(image, size);
+    uint32_t pgdir = paging_new_user();
     if (!pgdir) {
         console_puts("out of memory\n");
+        return -1;
+    }
+    uint32_t entry;
+    if (elf_load(pgdir, image, size, &entry) < 0) {
+        paging_destroy_user(pgdir);
+        console_puts("not a valid executable\n");
         return -1;
     }
     uint8_t *kstack = kmalloc(KSTACK_SIZE);
@@ -83,7 +92,7 @@ int task_spawn_user(const char *name, const void *image, uint32_t size)
     *--sp = USER_STACK_TOP;         /* esp */
     *--sp = 0x202;                  /* eflags: IF set */
     *--sp = SEL_UCODE;              /* cs */
-    *--sp = USER_BASE;              /* eip */
+    *--sp = entry;                  /* eip */
     *--sp = (uint32_t)user_entry;
     *--sp = 0;                      /* ebp */
     *--sp = 0;                      /* ebx */
@@ -104,6 +113,12 @@ int task_spawn_user(const char *name, const void *image, uint32_t size)
         n++;
     }
     t->name[n] = '\0';
+    n = 0;
+    while (args[n] && n < 63) {
+        t->args[n] = args[n];
+        n++;
+    }
+    t->args[n] = '\0';
     t->state = TASK_READY;
     return t->pid;
 }
@@ -112,6 +127,7 @@ void task_reap(struct task *t)
 {
     if (t->state != TASK_ZOMBIE)
         return;
+    file_close_all(t->pid);     /* flush anything left open */
     if (t->pgdir)
         paging_destroy_user(t->pgdir);
     if (t->kstack)

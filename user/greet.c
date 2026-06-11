@@ -2,10 +2,12 @@
 
 /* Reads a line of input through the getc syscall and greets back. */
 
-int main(void)
+int main(const char *args)
 {
     char name[64];
     int n = 0;
+
+    (void)args;
 
     puts("What is your name? ");
     for (;;) {

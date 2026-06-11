@@ -40,6 +40,15 @@ void console_input(char c)
     in_head = next;
 }
 
+int console_trygetc(void)
+{
+    if (in_head == in_tail)
+        return -1;
+    uint8_t c = (uint8_t)inbuf[in_tail];
+    in_tail++;
+    return c;
+}
+
 char console_getc(void)
 {
     /* May be entered with interrupts off (syscall gate); make sure

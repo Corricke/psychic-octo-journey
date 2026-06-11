@@ -13,16 +13,16 @@ octo:/> write docs/note.txt saved to disk for real
 ok
 octo:/> cat docs/note.txt
 saved to disk for real
-octo:/> run bin/hello.bin
-Hello from ring 3!
-octo:/> run bin/ticker.bin &
-[3] bin/ticker.bin
+octo:/> run bin/wc.elf docs/note.txt
+1 lines, 5 words, 23 bytes
+octo:/> run bin/cp.elf docs/note.txt note2.txt
+23 bytes copied
+octo:/> run bin/ticker.elf &
+[3] bin/ticker.elf
 octo:/> [tick]ps
 pid  state    name
 1    ready    shell *
-3    ready    bin/ticker.bin
-octo:/> peek 0x7c00 16
-0x00007c00  fa 31 c0 8e d8 8e c0 8e d0 bc 00 7c fb 88 16 d6  |.1.........|....|
+3    ready    bin/ticker.elf
 ```
 
 ## Design
@@ -69,16 +69,20 @@ identity-mapped in ring 0; user programs run paged in ring 3.
 - **Memory protection**: paging with the first 256 MiB identity-mapped
   for the kernel (4 MiB PSE pages, supervisor-only). Each process gets
   its own page directory with a 4 MiB user window at `0x40000000`.
-- **Processes**: ring-3 user processes loaded as flat binaries from the
-  filesystem, preemptively scheduled round-robin from the timer
-  interrupt. Each task has its own kernel stack; the TSS switches stacks
-  on ring transitions. A faulting user process is killed and reaped —
-  the kernel keeps running.
-- **Syscalls**: `int 0x80` (exit, putc, getc, puts, ticks, yield), with
-  user-mode wrappers in `user/syscall.h`. The shell runs programs in the
-  foreground or, with `&`, in the background.
-- **Shell**: line editor with backspace, then a simple
-  first-word-dispatches command loop.
+- **Processes**: ring-3 user processes loaded from ELF executables on
+  the filesystem (PT_LOAD segments, proper .bss zeroing via p_memsz),
+  preemptively scheduled round-robin from the timer interrupt. Each task
+  has its own kernel stack; the TSS switches stacks on ring transitions.
+  A faulting user process is killed and reaped — the kernel keeps
+  running.
+- **Syscalls**: `int 0x80` — exit, putc, getc, puts, ticks, yield, plus
+  file I/O (open/close/read/write, with fds 0/1/2 wired to the console)
+  and getargs for the command-line tail. User wrappers live in
+  `user/syscall.h`. The shell runs programs in the foreground or, with a
+  trailing `&`, in the background.
+- **Shell**: line editor with backspace and arrow-key history (PS/2
+  extended scancodes and ANSI escape sequences both map to the same
+  in-band key codes), then a simple first-word-dispatches command loop.
 
 | command | description |
 |---|---|
@@ -92,8 +96,9 @@ identity-mapped in ring 0; user programs run paged in ring 3.
 | `rm <path>` | remove a file or empty directory |
 | `mkdir <dir>` | create a directory |
 | `cd <dir>` | change directory |
-| `run <file> [&]` | run a user program, optionally in the background |
+| `run <file> [args] [&]` | run a user program, optionally in the background |
 | `ps` | list tasks and free frames |
+| `history` | show command history (also: up/down arrows) |
 | `mem` | print the BIOS E820 memory map |
 | `heap` | kernel heap statistics |
 | `disk` | ATA drive model and capacity |
@@ -127,11 +132,19 @@ mode or a serial port.
 
 ## User programs
 
-User programs are flat binaries linked at `0x40000000` (see
-`user/user.ld`), started through `user/crt0.c`, and talk to the kernel
-only through `int 0x80`. The build copies them into `/BIN` on the
-filesystem image: `HELLO.BIN` (hello world), `TICKER.BIN` (background
-multitasking demo), `GREET.BIN` (interactive input demo).
+User programs are static ELF executables linked at `0x40000000` (see
+`user/user.ld`), started through `user/crt0.c` (which fetches the
+command-line tail via the getargs syscall and passes it to
+`main(const char *args)`), and talk to the kernel only through
+`int 0x80`. The build copies them into `/BIN` on the filesystem image:
+
+| program | demo |
+|---|---|
+| `HELLO.ELF` | hello world |
+| `TICKER.ELF` | background multitasking |
+| `GREET.ELF` | interactive console input |
+| `CP.ELF` | file copy through read/write syscalls |
+| `WC.ELF` | line/word/byte count |
 
 ## Layout
 
@@ -144,7 +157,9 @@ kernel/isr.asm     interrupt stubs (exceptions, IRQs, int 0x80)
 kernel/idt.c       IDT, PIC remap, dispatch, user-fault kill
 kernel/ctx.asm     context switch + ring-3 entry trampoline
 kernel/task.c      task table, spawn/exit/reap, round-robin scheduler
+kernel/elf.c       ELF32 executable loader
 kernel/syscall.c   int 0x80 syscall handlers
+kernel/file.c      per-process file descriptors over FAT16
 kernel/frame.c     physical 4 KiB frame allocator
 kernel/paging.c    kernel identity map + per-process address spaces
 kernel/heap.c      kmalloc/kfree over usable E820 memory
@@ -159,6 +174,6 @@ kernel/shell.c     command shell
 kernel/string.c    mem*/str* routines
 kernel/linker.ld   links the kernel as a flat binary at 0x10000
 user/syscall.h     user-mode syscall wrappers
-user/crt0.c        user program entry
-user/*.c           demo programs (hello, ticker, greet)
+user/crt0.c        user program entry (fetches args, calls main)
+user/*.c           demo programs (hello, ticker, greet, cp, wc)
 ```

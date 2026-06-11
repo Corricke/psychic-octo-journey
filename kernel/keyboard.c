@@ -28,12 +28,18 @@ void keyboard_irq(void)
 {
     uint8_t sc = inb(0x60);
 
-    if (sc == 0xE0) {           /* extended prefix (arrows etc.), ignored */
+    if (sc == 0xE0) {           /* extended prefix */
         ext = 1;
         return;
     }
     if (ext) {
         ext = 0;
+        switch (sc) {           /* make codes only; releases ignored */
+        case 0x48: console_input((char)KEY_UP); break;
+        case 0x50: console_input((char)KEY_DOWN); break;
+        case 0x4B: console_input((char)KEY_LEFT); break;
+        case 0x4D: console_input((char)KEY_RIGHT); break;
+        }
         return;
     }
 

@@ -20,6 +20,7 @@ struct task {
     int pid;
     int exit_code;
     char name[16];
+    char args[64];
 };
 
 void task_init(void);
@@ -27,8 +28,9 @@ struct task *task_current(void);
 struct task *task_by_pid(int pid);
 struct task *task_table(void);  /* for ps */
 
-/* Spawn a ring-3 process from a flat binary image. Returns pid or -1. */
-int task_spawn_user(const char *name, const void *image, uint32_t size);
+/* Spawn a ring-3 process from an ELF image. Returns pid or -1. */
+int task_spawn_user(const char *name, const void *image, uint32_t size,
+                    const char *args);
 
 void task_reap(struct task *t);
 void task_exit(int code);       /* current task; does not return */

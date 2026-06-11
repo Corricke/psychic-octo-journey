@@ -5,7 +5,6 @@ SECTIONS
 {
     . = 0x40000000;
 
-    .entry  : { *(.entry) }
     .text   : { *(.text*) }
     .rodata : { *(.rodata*) }
     .data   : { *(.data*) }

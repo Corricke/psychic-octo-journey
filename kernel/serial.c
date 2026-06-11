@@ -1,10 +1,16 @@
 #include "serial.h"
 #include "io.h"
+#include "console.h"
 
 #define COM1 0x3F8
 
 void serial_init(void)
 {
+    /* Anything that arrived before init would be discarded by the FIFO
+     * reset below -- hand it to the console buffer first. */
+    while (inb(COM1 + 5) & 0x01)
+        console_input((char)inb(COM1));
+
     outb(COM1 + 1, 0x00);       /* disable interrupts during setup */
     outb(COM1 + 3, 0x80);       /* DLAB on */
     outb(COM1 + 0, 0x01);       /* divisor 1 -> 115200 baud */
